@@ -44,7 +44,6 @@ local shootAnim = loadAnim(SHOOT_ANIM_ID)
 local reloadAnim = loadAnim(RELOAD_ANIM_ID)
 local equipSpinAnim = loadAnim(EQUIP_SPIN_ANIM_ID)
 
--- Track which animations are ours so we can block default anims
 local ourAnimIds = {
 	[IDLE_ANIM_ID] = true,
 	[RIGHTCLICK_IDLE_ANIM_ID] = true,
@@ -109,46 +108,58 @@ local function updateIdleAnim()
 	end
 end
 
--- Equip spin on tool only
 local function spinToolOnEquip()
 	if not Handle then return end
-	
+
 	isPlayingEquipSpin = true
-	
+
 	local startCFrame = Handle.CFrame
 	local startTime = tick()
 	local duration = 0.9
-	
-	-- Play animation for the character
+
+	-- Find and disable the weld between handle and hand
+	local weld = Handle:FindFirstChildOfClass("Weld") or Handle:FindFirstChildOfClass("Motor6D")
+	local weldDisabled = false
+	if weld then
+		weld.Enabled = false
+		weldDisabled = true
+	end
+
 	local animTrack = Humanoid:LoadAnimation(equipSpinAnim)
 	animTrack.Looped = false
 	animTrack.Priority = Enum.AnimationPriority.Action4
 	animTrack:Play()
-	
-	-- Spin the tool
+
 	local spinConnection
 	spinConnection = RunService.RenderStepped:Connect(function()
 		if not isPlayingEquipSpin or not Handle or not Handle.Parent then
 			spinConnection:Disconnect()
+			-- Re-enable weld
+			if weldDisabled and weld then
+				weld.Enabled = true
+			end
 			return
 		end
-		
+
 		local elapsed = tick() - startTime
 		if elapsed >= duration then
 			spinConnection:Disconnect()
 			isPlayingEquipSpin = false
 			Handle.CFrame = startCFrame * CFrame.Angles(0, math.rad(520), 0)
+			-- Re-enable weld
+			if weldDisabled and weld then
+				weld.Enabled = true
+			end
 			updateIdleAnim()
 			return
 		end
-		
+
 		local t = elapsed / duration
 		local angle = math.rad(520 * t)
 		Handle.CFrame = startCFrame * CFrame.Angles(0, angle, 0)
 	end)
 end
 
--- Dash state
 local dashBodyVelocity = nil
 local dashConnections = {}
 
@@ -184,19 +195,14 @@ local function startDash()
 
 	isDashing = true
 
-	-- Notify server
 	local dashEvent = Tool:FindFirstChild("DashEvent")
 	if dashEvent then
 		dashEvent:FireServer(true)
 	end
 
-	-- Play dash animation
 	playLoopedAnim(dashAnim)
-
-	-- Set speed to 2x
 	Humanoid.WalkSpeed = normalWalkSpeed * 2
 
-	-- BodyVelocity to force forward movement (player can only turn)
 	dashBodyVelocity = Instance.new("BodyVelocity")
 	dashBodyVelocity.MaxForce = Vector3.new(math.huge, 0, math.huge)
 	dashBodyVelocity.Velocity = HumanoidRootPart.CFrame.LookVector * normalWalkSpeed * 2
@@ -204,43 +210,35 @@ local function startDash()
 
 	local startTime = tick()
 
-	-- Heartbeat: update direction + wall detection + timeout
 	local hb = RunService.Heartbeat:Connect(function()
 		if not isDashing then return end
 
-		-- Update velocity to face direction (allows turning only)
 		dashBodyVelocity.Velocity = HumanoidRootPart.CFrame.LookVector * normalWalkSpeed * 2
 
-		-- 2 second timeout
 		if tick() - startTime >= 1 then
 			endDash()
 			return
 		end
 	end)
 	table.insert(dashConnections, hb)
-
 end
 
--- Kill animation handler (server tells us to play it)
 local killEvent = Tool:WaitForChild("KillEvent")
 killEvent.OnClientEvent:Connect(function()
 	if not Humanoid then return end
 
-	-- End dash if active
 	if isDashing then
 		endDash()
 	end
 
 	isKillAnimPlaying = true
-
-	-- Freeze the killer in place
 	Humanoid.WalkSpeed = 0
+
 	local freezeVelocity = Instance.new("BodyVelocity")
 	freezeVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
 	freezeVelocity.Velocity = Vector3.new(0, 0, 0)
 	freezeVelocity.Parent = HumanoidRootPart
 
-	-- Play kill animation
 	local track = playOnceAnim(killAnim)
 
 	track.Stopped:Connect(function()
@@ -255,7 +253,6 @@ killEvent.OnClientEvent:Connect(function()
 	end)
 end)
 
--- Reload function
 local function startReload()
 	if isReloading or isPlayingEquipSpin or not isEquipped then return end
 	if not Humanoid then return end
@@ -264,7 +261,6 @@ local function startReload()
 	isReloading = true
 	canShoot = false
 
-	-- Play reload animation
 	local track = playOnceAnim(reloadAnim)
 
 	track.Stopped:Connect(function()
@@ -275,7 +271,6 @@ local function startReload()
 	end)
 end
 
--- Input handling
 UIS.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 	if not isEquipped or isPlayingEquipSpin then return end
@@ -287,7 +282,6 @@ UIS.InputBegan:Connect(function(input, gameProcessed)
 	end
 end)
 
--- Right click tracking
 Tool.Equipped:Connect(function(mouse)
 	isEquipped = true
 	Character = Player.Character or Player.CharacterAdded:Wait()
@@ -295,10 +289,8 @@ Tool.Equipped:Connect(function(mouse)
 	HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 	Handle = Tool:WaitForChild("Handle")
 
-	-- Play equip spin animation first
 	spinToolOnEquip()
 
-	-- Block default animations while tool is equipped
 	if animBlockConnection then animBlockConnection:Disconnect() end
 	animBlockConnection = Humanoid.AnimationPlayed:Connect(function(track)
 		if track.Animation and not ourAnimIds[track.Animation.AnimationId] then
@@ -306,7 +298,6 @@ Tool.Equipped:Connect(function(mouse)
 		end
 	end)
 
-	-- Right click
 	if mouse then
 		mouse.Button2Down:Connect(function()
 			if not isEquipped or not Humanoid or isPlayingEquipSpin then return end
@@ -320,7 +311,6 @@ Tool.Equipped:Connect(function(mouse)
 			updateIdleAnim()
 		end)
 
-		-- Left click while right click is held = shoot
 		mouse.Button1Down:Connect(function()
 			if not isEquipped or not Humanoid or isPlayingEquipSpin then return end
 			if not isRightClickHeld then return end
@@ -332,7 +322,6 @@ Tool.Equipped:Connect(function(mouse)
 			canShoot = false
 			ammo = ammo - 1
 
-			-- Play shoot animation
 			local shootTrack = playOnceAnim(shootAnim)
 			shootTrack.Stopped:Connect(function()
 				if not isReloading and isEquipped then
@@ -346,7 +335,7 @@ Tool.Equipped:Connect(function(mouse)
 			end
 
 			if ammo <= 0 then
-				-- Out of ammo, must press R to reload
+				-- out of ammo
 			else
 				task.delay(0.2, function()
 					canShoot = true
@@ -355,7 +344,6 @@ Tool.Equipped:Connect(function(mouse)
 		end)
 	end
 
-	-- Movement state tracking
 	Humanoid.Running:Connect(function(speed)
 		if not isDashing and not isKillAnimPlaying and not isPlayingEquipSpin then
 			updateIdleAnim()
@@ -367,7 +355,6 @@ end)
 
 Tool.Unequipped:Connect(function()
 	if isReloading then
-		-- Can't unequip during reload, force re-equip
 		if Character and Humanoid then
 			Humanoid:EquipTool(Tool)
 		end
