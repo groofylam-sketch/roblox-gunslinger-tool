@@ -26,7 +26,7 @@ local currentTrack = nil
 local normalWalkSpeed = 14
 local isPlayingEquipSpin = false
 
--- References (updated on equip)
+-- References
 local Character, Humanoid, HumanoidRootPart, Handle
 
 local function loadAnim(id)
@@ -44,6 +44,7 @@ local shootAnim = loadAnim(SHOOT_ANIM_ID)
 local reloadAnim = loadAnim(RELOAD_ANIM_ID)
 local equipSpinAnim = loadAnim(EQUIP_SPIN_ANIM_ID)
 
+-- Animations we control
 local ourAnimIds = {
 	[IDLE_ANIM_ID] = true,
 	[RIGHTCLICK_IDLE_ANIM_ID] = true,
@@ -62,6 +63,7 @@ local function playLoopedAnim(animObj)
 	if currentTrack then
 		currentTrack:Stop()
 	end
+
 	local track = Humanoid:LoadAnimation(animObj)
 	track.Looped = true
 	track.Priority = Enum.AnimationPriority.Action4
@@ -74,6 +76,7 @@ local function playOnceAnim(animObj)
 	if currentTrack then
 		currentTrack:Stop()
 	end
+
 	local track = Humanoid:LoadAnimation(animObj)
 	track.Looped = false
 	track.Priority = Enum.AnimationPriority.Action4
@@ -99,6 +102,7 @@ end
 
 local function updateIdleAnim()
 	if isPlayingEquipSpin or isDashing or isKillAnimPlaying or isReloading or not isEquipped then return end
+
 	if isMoving() then
 		playLoopedAnim(walkAnim)
 	elseif isRightClickHeld then
@@ -108,23 +112,26 @@ local function updateIdleAnim()
 	end
 end
 
-local function spinToolOnEquip()
+-- Spins only the handle in place while player stands still
+local function spinHandleInPlace()
 	if not Handle then return end
 
 	isPlayingEquipSpin = true
 
-	local startCFrame = Handle.CFrame
-	local startTime = tick()
-	local duration = 0.9
-
-	-- Find and disable the weld between handle and hand
+	-- Store the original weld/motor properties
 	local weld = Handle:FindFirstChildOfClass("Weld") or Handle:FindFirstChildOfClass("Motor6D")
-	local weldDisabled = false
+	local originalC0 = nil
+	local originalC1 = nil
+	
 	if weld then
-		weld.Enabled = false
-		weldDisabled = true
+		originalC0 = weld.C0
+		originalC1 = weld.C1
 	end
 
+	local startTime = tick()
+	local duration = 0.9
+	
+	-- Play animation on player (for visual effect, but won't move them)
 	local animTrack = Humanoid:LoadAnimation(equipSpinAnim)
 	animTrack.Looped = false
 	animTrack.Priority = Enum.AnimationPriority.Action4
@@ -134,9 +141,9 @@ local function spinToolOnEquip()
 	spinConnection = RunService.RenderStepped:Connect(function()
 		if not isPlayingEquipSpin or not Handle or not Handle.Parent then
 			spinConnection:Disconnect()
-			-- Re-enable weld
-			if weldDisabled and weld then
-				weld.Enabled = true
+			if weld and originalC0 and originalC1 then
+				weld.C0 = originalC0
+				weld.C1 = originalC1
 			end
 			return
 		end
@@ -145,21 +152,29 @@ local function spinToolOnEquip()
 		if elapsed >= duration then
 			spinConnection:Disconnect()
 			isPlayingEquipSpin = false
-			Handle.CFrame = startCFrame * CFrame.Angles(0, math.rad(520), 0)
-			-- Re-enable weld
-			if weldDisabled and weld then
-				weld.Enabled = true
+
+			-- Reset weld to original
+			if weld and originalC0 and originalC1 then
+				weld.C0 = originalC0
+				weld.C1 = originalC1
 			end
+
 			updateIdleAnim()
 			return
 		end
 
+		-- Rotate the handle around its own center
 		local t = elapsed / duration
 		local angle = math.rad(520 * t)
-		Handle.CFrame = startCFrame * CFrame.Angles(0, angle, 0)
+		
+		if weld then
+			-- Spin the tool by rotating the C1 offset (keeps it in hand)
+			weld.C1 = originalC1 * CFrame.Angles(0, angle, 0)
+		end
 	end)
 end
 
+-- Dash state
 local dashBodyVelocity = nil
 local dashConnections = {}
 
@@ -220,9 +235,11 @@ local function startDash()
 			return
 		end
 	end)
+
 	table.insert(dashConnections, hb)
 end
 
+-- Kill animation handler
 local killEvent = Tool:WaitForChild("KillEvent")
 killEvent.OnClientEvent:Connect(function()
 	if not Humanoid then return end
@@ -253,6 +270,7 @@ killEvent.OnClientEvent:Connect(function()
 	end)
 end)
 
+-- Reload
 local function startReload()
 	if isReloading or isPlayingEquipSpin or not isEquipped then return end
 	if not Humanoid then return end
@@ -271,6 +289,7 @@ local function startReload()
 	end)
 end
 
+-- Inputs
 UIS.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 	if not isEquipped or isPlayingEquipSpin then return end
@@ -282,6 +301,7 @@ UIS.InputBegan:Connect(function(input, gameProcessed)
 	end
 end)
 
+-- Equip event
 Tool.Equipped:Connect(function(mouse)
 	isEquipped = true
 	Character = Player.Character or Player.CharacterAdded:Wait()
@@ -289,15 +309,21 @@ Tool.Equipped:Connect(function(mouse)
 	HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 	Handle = Tool:WaitForChild("Handle")
 
-	spinToolOnEquip()
+	-- Play the gunslinger equip spin FIRST
+	spinHandleInPlace()
 
-	if animBlockConnection then animBlockConnection:Disconnect() end
+	-- Block default animations while tool is equipped
+	if animBlockConnection then
+		animBlockConnection:Disconnect()
+	end
+
 	animBlockConnection = Humanoid.AnimationPlayed:Connect(function(track)
 		if track.Animation and not ourAnimIds[track.Animation.AnimationId] then
 			track:Stop()
 		end
 	end)
 
+	-- Right click controls
 	if mouse then
 		mouse.Button2Down:Connect(function()
 			if not isEquipped or not Humanoid or isPlayingEquipSpin then return end
@@ -360,16 +386,21 @@ Tool.Unequipped:Connect(function()
 		end
 		return
 	end
+
 	isEquipped = false
 	isRightClickHeld = false
+
 	if isDashing then
 		endDash()
 	end
+
 	stopAllAnims()
+
 	if animBlockConnection then
 		animBlockConnection:Disconnect()
 		animBlockConnection = nil
 	end
+
 	Humanoid = nil
 	HumanoidRootPart = nil
 	Character = nil
